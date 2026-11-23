@@ -28,11 +28,18 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#208AEF",
-          "image": "./assets/images/splash-icon.png",
-          "imageWidth": 76
+          "backgroundColor": "#f6f2fc",
+          "image": "./assets/images/snaply-launch-mark.png",
+          "imageWidth": 128,
+          "ios": {
+            "image": "./assets/images/snaply-splash.png",
+            "enableFullScreenImage_legacy": true,
+            "resizeMode": "cover"
+          }
         }
-      ]
+      ],
+      "@clerk/expo",
+      "expo-secure-store"
     ],
     "experiments": {
       "typedRoutes": true,
