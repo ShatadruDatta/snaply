@@ -17,7 +17,7 @@ export default function Index() {
     return () => clearTimeout(timer);
   }, [displayed]);
 
-  if (elapsed && isLoaded) return <Redirect href={isSignedIn ? "/account" : "/auth"} />;
+  if (elapsed && isLoaded) return <Redirect href={isSignedIn ? "/home" : "/auth"} />;
 
   return (
     <View style={styles.screen}>

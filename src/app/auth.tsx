@@ -44,7 +44,7 @@ export default function AuthScreen() {
     }
   }
 
-  if (isSignedIn) return <Redirect href="/account" />;
+  if (isSignedIn) return <Redirect href="/home" />;
 
   const scale = Math.min(width / 398, 1.22);
   const brandTop = Math.max(insets.top + 10, height * 0.084);
