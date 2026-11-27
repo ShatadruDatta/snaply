@@ -1,20 +1,22 @@
 import { useAuth } from "@clerk/expo";
-import { Redirect } from "expo-router";
+import { Redirect, usePathname } from "expo-router";
 import { NativeTabs } from "expo-router/native-tabs";
 import { ActivityIndicator } from "react-native";
 
+import { SocialSession } from "../../components/social/SocialSession";
 import { SavedPostsProvider } from "../../components/home/SavedPosts";
 
 export const unstable_settings = { initialRouteName: "home" };
 
 export default function TabLayout() {
-  const { isLoaded, isSignedIn } = useAuth();
+  const pathname = usePathname();
+  const { isLoaded, isSignedIn, sessionId } = useAuth();
   if (!isLoaded) return <ActivityIndicator style={{ flex: 1 }} />;
   if (!isSignedIn) return <Redirect href="/auth" />;
 
   return (
-    <SavedPostsProvider>
-      <NativeTabs tintColor="#7535ff">
+    <SocialSession key={sessionId}><SavedPostsProvider>
+      <NativeTabs hidden={pathname === "/messages" || pathname.startsWith("/messages/") || pathname === "/create" || pathname === "/explore/suggested-people"} tintColor="#7535ff">
         <NativeTabs.Trigger name="home">
           <NativeTabs.Trigger.Icon sf="house.fill" md="home" />
           <NativeTabs.Trigger.Label>Home</NativeTabs.Trigger.Label>
@@ -23,7 +25,7 @@ export default function TabLayout() {
           <NativeTabs.Trigger.Icon sf="magnifyingglass" md="search" />
           <NativeTabs.Trigger.Label>Explore</NativeTabs.Trigger.Label>
         </NativeTabs.Trigger>
-        <NativeTabs.Trigger name="create">
+        <NativeTabs.Trigger name="create" disableAutomaticContentInsets>
           <NativeTabs.Trigger.Icon sf="plus.app" md="add_box" />
           <NativeTabs.Trigger.Label>Create</NativeTabs.Trigger.Label>
         </NativeTabs.Trigger>
@@ -36,6 +38,6 @@ export default function TabLayout() {
           <NativeTabs.Trigger.Label>Profile</NativeTabs.Trigger.Label>
         </NativeTabs.Trigger>
       </NativeTabs>
-    </SavedPostsProvider>
+    </SavedPostsProvider></SocialSession>
   );
 }

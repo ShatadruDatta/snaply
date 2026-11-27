@@ -1,27 +1,33 @@
 import { Image } from "expo-image";
 import { router } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import { type ComponentRef, useRef, useState } from "react";
-import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from "react-native";
+import { useRef, useState } from "react";
+import { Button, FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { accent, FeedIcon } from "./FeedIcon";
 import { PostCard } from "./PostCard";
-import { posts, stories } from "./content";
+import { usePaginatedQuery } from "convex/react";
+import { api } from "../../../convex/_generated/api";
+import type { Id } from "../../../convex/_generated/dataModel";
+import { useSocialSession } from "../social/SocialSession";
+import { PostDialog } from "../social/PostDialog";
+import { stories } from "./content";
 
 const filters = ["For You", "Following", "Trending"] as const;
 export function HomeFeed() {
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const storySize = Math.min(65, Math.max(54, (width - 75) / 5));
-  const feed = useRef<ComponentRef<typeof ScrollView>>(null);
+  const feed = useRef<FlatList>(null);
   const [filter, setFilter] = useState<(typeof filters)[number]>("For You");
   const [story, setStory] = useState<(typeof stories)[number] | null>(null);
   const [searching, setSearching] = useState(false);
   const [query, setQuery] = useState("");
 
+  const [postId, setPostId] = useState<Id<"posts">>();
   function openSearch() {
     setSearching(true);
-    feed.current?.scrollTo({ y: 0, animated: true });
+    feed.current?.scrollToOffset({ offset: 0, animated: true });
   }
 
   function closeSearch() {
@@ -29,9 +35,11 @@ export function HomeFeed() {
     setQuery("");
   }
 
-  const ordered = filter === "Trending" ? [...posts].sort((a, b) => b.likes - a.likes) : posts;
-  const visible = ordered.filter(post => (filter !== "Following" || post.following) &&
-    (post.author + " " + post.location + " " + post.caption).toLowerCase().includes(query.trim().toLowerCase()));
+  const connection = useSocialSession();
+  const scope = filter === "Following" ? "following" : filter === "Trending" ? "trending" : "recent";
+  const { results, status, loadMore } = usePaginatedQuery(api.social.feed, connection.ready ? { scope } : "skip", { initialNumItems: 16 });
+  const visible = results.filter(post => (post.author.name + " " + post.author.handle + " " + post.caption)
+    .toLowerCase().includes(query.trim().toLowerCase()));
 
   return (
     <View style={[styles.screen, { paddingTop: insets.top, paddingLeft: insets.left, paddingRight: insets.right }]}>
@@ -55,7 +63,13 @@ export function HomeFeed() {
             <Pressable accessibilityRole="button" onPress={closeSearch}><Text style={styles.searchClose}>Cancel</Text></Pressable>
           </View>
         )}
-        <ScrollView ref={feed} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} style={styles.feed}>
+        <FlatList ref={feed} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} style={styles.feed}
+          data={visible} keyExtractor={post => post.id}
+          renderItem={({ item }) => <PostCard post={item} openComments={() => setPostId(item.id)} />}
+          ListEmptyComponent={<Text style={styles.empty}>{!connection.ready ? connection.message : status === "LoadingFirstPage" ? "Loading posts…" : query ? "No matching posts" :
+            filter === "Following" ? "Follow people in Explore to see their posts here." : "Your feed is ready for its first post."}</Text>}
+          ListFooterComponent={status === "CanLoadMore" ? <Button title="More posts" onPress={() => loadMore(16)} /> : undefined}
+          ListHeaderComponent={<>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.stories}>
             <View style={[styles.addStory, { width: storySize + 8, minHeight: storySize + 17 }]}>
               <View style={styles.addCircle}><Text style={styles.plus}>+</Text></View>
@@ -77,12 +91,9 @@ export function HomeFeed() {
               </Pressable>
             ))}
           </View>
-          {ordered.map(post => (
-            <View key={post.id} style={!visible.includes(post) && styles.hidden}><PostCard post={post} /></View>
-          ))}
-          {visible.length === 0 && <Text style={styles.empty}>No matching posts</Text>}
-        </ScrollView>
+        </>} />
       </View>
+      {connection.ready && postId && <PostDialog postId={postId} close={() => setPostId(undefined)} />}
       <Modal visible={story !== null} transparent animationType="fade" onRequestClose={() => setStory(null)}>
         <Pressable accessibilityRole="button" accessibilityLabel="Close story" onPress={() => setStory(null)} style={styles.backdrop}>
           {story && <View style={styles.storyPreview}><Image source={story.portrait} style={styles.storyImage} /><Text style={styles.storyTitle}>{story.name}</Text></View>}

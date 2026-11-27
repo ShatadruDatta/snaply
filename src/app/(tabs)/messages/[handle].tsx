@@ -1,14 +1,37 @@
+import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
+import {
+  AudioModule,
+  RecordingPresets,
+  setAudioModeAsync,
+  useAudioRecorder,
+  useAudioRecorderState,
+} from "expo-audio";
+import { randomUUID } from "expo-crypto";
 import { Image } from "expo-image";
 import * as ImagePicker from "expo-image-picker";
-import { Redirect, router, useLocalSearchParams } from "expo-router";
+import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import { type ComponentRef, useEffect, useRef, useState } from "react";
-import { Alert, Keyboard, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  Alert,
+  FlatList,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-
+import { api } from "../../../../convex/_generated/api";
 import { FeedIcon } from "../../../components/home/FeedIcon";
-import { conversations } from "../../../components/messages/conversations";
-import { useThreads } from "../../../components/messages/Threads";
+import { useChatPresence } from "../../../components/messages/useChatPresence";
+import { s } from "../../../components/messages/chatStyles";
+import { MessageBubble, type ChatMessage } from "../../../components/messages/MessageBubble";
+import { useSocialSession } from "../../../components/social/SocialSession";
+import { uploadMedia } from "../../../components/social/upload";
 
 const icons = {
   back: require("../../../../assets/images/chat/back.png"),
@@ -18,163 +41,439 @@ const icons = {
   attach: require("../../../../assets/images/chat/attach.png"),
   mic: require("../../../../assets/images/chat/mic.png"),
 };
-const photos = [
-  require("../../../../assets/images/chat/peak.png"),
-  require("../../../../assets/images/chat/flags.png"),
-  require("../../../../assets/images/home/himalayas.jpg"),
-  require("../../../../assets/images/profile/lake.jpg"),
-  require("../../../../assets/images/profile/forest.jpg"),
-  require("../../../../assets/images/profile/summit.jpg"),
-];
 
-function Control({ icon, label, onPress }: { icon: keyof typeof icons | "more"; label: string; onPress: () => void }) {
-  return <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={onPress} hitSlop={3} style={[s.control, (icon === "gallery" || icon === "attach") && s.composerButton]}>
-    {icon === "more" ? <FeedIcon name="more" size={18} /> : <Image source={icons[icon]} contentFit="contain" style={s.icon} />}
-  </Pressable>;
-}
-
-function Incoming({ avatar, children, time }: { avatar: number; children: string; time?: string }) {
-  return <View>
-    <View style={s.incoming}>
-      <Image source={avatar} style={s.smallAvatar} />
-      <View style={s.received}><Text style={s.body}>{children}</Text></View>
-    </View>
-    {time && <Text style={s.inTime}>{time}</Text>}
-  </View>;
+function Control({
+  icon,
+  label,
+  onPress,
+}: {
+  icon: keyof typeof icons | "more";
+  label: string;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      onPress={onPress}
+      hitSlop={4}
+      style={[s.control, (icon === "gallery" || icon === "attach") && s.composerButton]}
+    >
+      {icon === "more" ? (
+        <FeedIcon name="more" size={18} />
+      ) : (
+        <Image source={icons[icon]} contentFit="contain" style={s.icon} />
+      )}
+    </Pressable>
+  );
 }
 
 export default function ChatScreen() {
   const { handle } = useLocalSearchParams<{ handle: string }>();
-  const person = conversations.find(item => item.name === handle);
-  const { markRead, threads, append } = useThreads();
+  return <Thread key={handle} handle={handle} />;
+}
+
+function Thread({ handle }: { handle: string }) {
+  const { ready, message } = useSocialSession();
+  const peer = useQuery(api.messages.peer, ready ? { handle } : "skip");
+  const { online, typing, signalTyping } = useChatPresence(handle, ready && !!peer);
+  const history = usePaginatedQuery(api.messages.history, ready && peer ? { handle } : "skip", {
+    initialNumItems: 40,
+  });
+  const send = useMutation(api.messages.send);
+  const read = useMutation(api.messages.markRead);
+  const begin = useMutation(api.messages.beginUpload);
   const insets = useSafeAreaInsets();
-  const scroll = useRef<ComponentRef<typeof ScrollView>>(null);
-  const followEnd = useRef(false);
+  const list = useRef<FlatList<ChatMessage>>(null);
+  const nearEnd = useRef(true);
+  const busy = useRef(false);
+  const request = useRef("");
+  const [focused, setFocused] = useState(false);
   const [draft, setDraft] = useState("");
-  const [gallery, setGallery] = useState(false);
-  const [keyboard, setKeyboard] = useState(false);
-  useEffect(() => { if (person) markRead(person.name); }, [markRead, person]);
+  const [photos, setPhotos] = useState<ImagePicker.ImagePickerAsset[]>([]);
+  const [voice, setVoice] = useState("");
+  const [location, setLocation] = useState("");
+  const [entry, setEntry] = useState<"Voice call" | "Video call" | "Place" | null>(null);
+  const [value, setValue] = useState("");
+  const [gallery, setGallery] = useState<string[] | null>(null);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState("");
+  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const recording = useAudioRecorderState(recorder).isRecording;
+  const newestIncoming = history.results[0]?.mine ? undefined : history.results[0]?.id;
+  const ordered = history.results.slice().reverse();
+  const avatar = peer?.avatar || require("../../../../assets/images/home/avatar.jpg");
 
+  useFocusEffect(
+    useCallback(() => {
+      setFocused(true);
+      return () => {
+        setFocused(false);
+        if (recorder.isRecording) {
+          void recorder
+            .stop()
+            .then(() => setAudioModeAsync({ allowsRecording: false }))
+            .catch(() => {});
+        }
+      };
+    }, [recorder]),
+  );
   useEffect(() => {
-    const show = Keyboard.addListener("keyboardWillShow", () => setKeyboard(true));
-    const hide = Keyboard.addListener("keyboardWillHide", () => setKeyboard(false));
-    return () => { show.remove(); hide.remove(); };
-  }, []);
+    if (focused && newestIncoming) {
+      read({ handle, throughId: newestIncoming }).catch(() =>
+        setError("Couldn’t mark the conversation as read."),
+      );
+    }
+  }, [focused, newestIncoming, handle, read]);
 
-  if (!person) return <Redirect href="/messages" />;
-  const { name, avatar } = person;
-  function send(photo?: string) {
-    if (!draft.trim() && !photo) return;
-    followEnd.current = true;
-    append(name, draft.trim(), photo);
-    setDraft("");
+  function edit() {
+    request.current = "";
+    setError("");
   }
-  async function attach() {
+  async function choosePhotos() {
+    if (busy.current || recording) return;
     try {
-      const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"] });
-      if (!result.canceled) send(result.assets[0].uri);
+      const pick = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        allowsMultipleSelection: true,
+        selectionLimit: 6,
+      });
+      if (!pick.canceled && pick.assets.some((asset) => (asset.fileSize || 0) > 25 * 1024 * 1024)) {
+        setError("Choose photos of 25 MB or less.");
+        return;
+      }
+      if (!pick.canceled) {
+        edit();
+        setPhotos(pick.assets.slice(0, 6));
+      }
     } catch {
-      Alert.alert("Couldn’t open photos", "Please try again.");
+      setError("Couldn’t open your photos. Try again.");
     }
   }
-  function back() {
-    router.dismissTo("/messages");
+  async function record() {
+    if (busy.current) return;
+    try {
+      if (recorder.isRecording) {
+        await recorder.stop();
+        await setAudioModeAsync({ allowsRecording: false });
+        if (recorder.uri) {
+          edit();
+          setVoice(recorder.uri);
+        }
+      } else {
+        if (!(await AudioModule.requestRecordingPermissionsAsync()).granted) {
+          setError("Allow microphone access to record a voice message.");
+          return;
+        }
+        await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+        await recorder.prepareToRecordAsync();
+        recorder.record();
+      }
+    } catch {
+      setError("Couldn’t record that voice message. Try again.");
+    }
+  }
+  async function submit() {
+    if (busy.current || !peer || recording || !(draft.trim() || photos.length || voice || location))
+      return;
+    busy.current = true;
+    request.current ||= randomUUID();
+    setSending(true);
+    setError("");
+    try {
+      const attachments = [];
+      for (const asset of photos) attachments.push(await uploadMedia(asset, begin, () => {}));
+      let audio;
+      if (voice) {
+        const blob = Platform.OS === "web" ? await (await fetch(voice)).blob() : undefined;
+        const file = blob ? new File([blob], "voice.webm", { type: blob.type }) : undefined;
+        audio = await uploadMedia(
+          { uri: voice, mimeType: file?.type || "audio/mp4", file },
+          begin,
+          () => {},
+        );
+      }
+      await send({
+        handle,
+        text: draft.trim(),
+        clientId: request.current,
+        attachments,
+        ...(audio && { voice: audio }),
+        ...(location && { location }),
+      });
+      nearEnd.current = true;
+      setDraft("");
+      setPhotos([]);
+      setVoice("");
+      setLocation("");
+      request.current = "";
+      list.current?.scrollToEnd({ animated: true });
+    } catch {
+      setError("Couldn’t send. Your message is saved here. Tap Send to retry.");
+    } finally {
+      busy.current = false;
+      setSending(false);
+    }
+  }
+  function showEntry(kind: NonNullable<typeof entry>) {
+    if (!busy.current) {
+      setValue("");
+      setEntry(kind);
+    }
+  }
+  function applyEntry() {
+    const text = value.trim();
+    if (!text) return;
+    if (entry !== "Place" && !/^https:\/\/\S+$/i.test(text)) {
+      Alert.alert("Enter an HTTPS meeting link.");
+      return;
+    }
+    edit();
+    if (entry === "Place") setLocation(text);
+    else setDraft([draft, entry + " invitation: " + text].filter(Boolean).join("\n"));
+    setEntry(null);
   }
   return (
     <KeyboardAvoidingView style={s.screen} behavior={Platform.OS === "ios" ? "padding" : undefined}>
       <StatusBar style="dark" />
       <View style={[s.header, { paddingTop: insets.top }]}>
-        <Image source={require("../../../../assets/images/chat/range.png")} contentFit="fill" style={s.mountains} />
+        <Image
+          source={require("../../../../assets/images/chat/range.png")}
+          contentFit="fill"
+          style={s.mountains}
+        />
         <View style={[s.toolbar, { paddingLeft: 10 + insets.left, paddingRight: 12 + insets.right }]}>
-          <Control icon="back" label="Back to Messages" onPress={back} />
-          <View><Image source={avatar} style={s.avatar} /><View style={s.onlineDot} /></View>
-          <View style={s.identity}>
-            <Text numberOfLines={1} adjustsFontSizeToFit style={s.name}>{name}</Text>
-            <Text style={s.status}><Text style={s.green}>● </Text>Online now</Text>
+          <Control icon="back" label="Back to Messages" onPress={() => router.dismissTo("/messages")} />
+          <View>
+            <Image source={avatar} style={s.avatar} />
+            {online && <View style={s.onlineDot} />}
           </View>
-          <Control icon="phone" label="Voice call" onPress={() => Alert.alert("Voice calls are unavailable in this demo.")} />
-          <Control icon="video" label="Video call" onPress={() => Alert.alert("Video calls are unavailable in this demo.")} />
-          <Control icon="more" label="Conversation options" onPress={() => Alert.alert(name, undefined, [{ text: "View shared photos", onPress: () => setGallery(true) }, { text: "Cancel", style: "cancel" }])} />
+          <View style={s.identity}>
+            <Text numberOfLines={1} style={s.name}>
+              {peer?.name || handle}
+            </Text>
+            <Text numberOfLines={1} style={s.status}>
+              {online ? (
+                <>
+                  <Text style={s.green}>● </Text>Online now
+                </>
+              ) : (
+                "@" + handle
+              )}
+            </Text>
+          </View>
+          <Control icon="phone" label="Invite to a voice call" onPress={() => showEntry("Voice call")} />
+          <Control icon="video" label="Invite to a video call" onPress={() => showEntry("Video call")} />
+          <Control
+            icon="more"
+            label="Conversation options"
+            onPress={() =>
+              Alert.alert(peer?.name || handle, undefined, [
+                {
+                  text: "View shared photos",
+                  onPress: () => setGallery(ordered.flatMap((item) => item.photos)),
+                },
+                { text: "Cancel", style: "cancel" },
+              ])
+            }
+          />
         </View>
       </View>
       <View style={[s.page, { paddingLeft: insets.left, paddingRight: insets.right }]}>
-        <ScrollView ref={scroll} automaticallyAdjustContentInsets={false} contentInsetAdjustmentBehavior="never" keyboardShouldPersistTaps="handled"
-          contentContainerStyle={s.history} onContentSizeChange={() => { if (followEnd.current) scroll.current?.scrollToEnd({ animated: true }); }}>
-          <Text style={s.day}>Today</Text>
-          <Incoming avatar={avatar} time="10:24 AM">{"Hey! 👋\nHow was your trip to Himalayas?\nThe photos looked amazing! 😍"}</Incoming>
-          <View style={s.sent}><Text style={s.light}>It was absolutely stunning! 🌄 The views were surreal, totally worth it!</Text><Text style={s.outTime}>10:26 AM  ✓✓</Text></View>
-          <View>
-            <Pressable accessibilityRole="button" accessibilityLabel="View six shared travel photos" style={s.collage} onPress={() => setGallery(true)}>
-              <Image source={photos[0]} style={s.mainPhoto} />
-              <View style={s.thumbnails}><Image source={photos[1]} style={s.thumbnail} />
-                <View style={s.thumbnail}><Image source={photos[2]} style={StyleSheet.absoluteFill} /><Text style={s.morePhotos}>+3</Text></View>
+        <FlatList
+          ref={list}
+          data={ordered}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={s.history}
+          keyboardShouldPersistTaps="handled"
+          contentInsetAdjustmentBehavior="never"
+          maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+          onScroll={({ nativeEvent: e }) => {
+            nearEnd.current = e.contentSize.height - e.layoutMeasurement.height - e.contentOffset.y < 72;
+          }}
+          onContentSizeChange={() => {
+            if (nearEnd.current) list.current?.scrollToEnd({ animated: false });
+          }}
+          ListHeaderComponent={
+            history.status === "CanLoadMore" ? (
+              <Text accessibilityRole="button" onPress={() => history.loadMore(40)} style={s.meta}>
+                Earlier messages
+              </Text>
+            ) : undefined
+          }
+          ListFooterComponent={
+            typing ? (
+              <View accessible accessibilityLabel={handle + " is typing"} style={s.incoming}>
+                <Image source={avatar} style={s.smallAvatar} />
+                <View style={s.typing}>
+                  {["#6720ff", "#8242ff", "#a17aef"].map((color) => (
+                    <View key={color} style={[s.dot, { backgroundColor: color }]} />
+                  ))}
+                </View>
               </View>
+            ) : undefined
+          }
+          ListEmptyComponent={
+            <Text style={s.meta}>
+              {!ready
+                ? message
+                : peer === null
+                  ? "Profile unavailable"
+                  : history.status === "Exhausted"
+                    ? "Send the first message."
+                    : "Loading messages…"}
+            </Text>
+          }
+          renderItem={({ item, index }) => {
+            const date = new Date(item.createdAt).toDateString();
+            const first = !index || date !== new Date(ordered[index - 1].createdAt).toDateString();
+            return (
+              <View style={{ gap: 6 }}>
+                {first && (
+                  <Text style={s.day}>
+                    {date === new Date().toDateString()
+                      ? "Today"
+                      : new Date(item.createdAt).toLocaleDateString()}
+                  </Text>
+                )}
+                <MessageBubble item={item} avatar={avatar} openPhotos={setGallery} />
+              </View>
+            );
+          }}
+        />
+        {!!error && (
+          <Text accessibilityLiveRegion="polite" style={s.meta}>
+            {error}
+          </Text>
+        )}
+        {(photos.length > 0 || !!voice || !!location) && (
+          <View style={s.pending}>
+            {photos.map((a) => (
+              <Image key={a.uri} source={a.uri} style={s.preview} />
+            ))}
+            {!!voice && <Text>Voice message</Text>}
+            {!!location && <Text>{location}</Text>}
+            <Text
+              accessibilityRole="button"
+              disabled={sending}
+              onPress={() => {
+                edit();
+                setPhotos([]);
+                setVoice("");
+                setLocation("");
+              }}
+            >
+              Remove
+            </Text>
+          </View>
+        )}
+        <View style={s.composer} pointerEvents={peer && !sending ? "auto" : "none"}>
+          <Control icon="gallery" label="Choose photos" onPress={choosePhotos} />
+          <Control
+            icon="attach"
+            label="Attach to message"
+            onPress={() =>
+              Alert.alert("Attach to message", undefined, [
+                { text: "Photos", onPress: choosePhotos },
+                { text: "Place", onPress: () => showEntry("Place") },
+                { text: "Cancel", style: "cancel" },
+              ])
+            }
+          />
+          <View style={s.inputBox}>
+            <TextInput
+              value={draft}
+              editable={!sending && !recording && !!peer}
+              maxLength={4000}
+              onChangeText={(text) => {
+                edit();
+                setDraft(text);
+                if (text.trim()) signalTyping();
+              }}
+              accessibilityLabel="Message"
+              placeholder={recording ? "Recording…" : "Type a message..."}
+              placeholderTextColor="#515472"
+              onSubmitEditing={submit}
+              returnKeyType="send"
+              style={s.input}
+            />
+            <Pressable
+              accessibilityLabel={recording ? "Stop recording" : "Record voice message"}
+              accessibilityRole="button"
+              onPress={record}
+              style={s.mic}
+            >
+              {recording ? (
+                <Text style={{ color: "#ac254b" }}>■</Text>
+              ) : (
+                <Image source={icons.mic} contentFit="contain" style={s.icon} />
+              )}
             </Pressable>
-            <Text style={s.photoTime}>10:27 AM  ✓✓</Text>
           </View>
-          <Incoming avatar={avatar} time="10:28 AM">{"Wow! These are incredible! 😍\nWhich place is this?"}</Incoming>
-          <View style={[s.sent, s.locationBubble]}>
-            <View style={s.place}><FeedIcon name="pin" color="white" size={14} /><Text style={s.placeText}>Triund, Himachal Pradesh</Text></View>
-            <Text style={s.light}>You should definitely plan a trip here sometime. It’s perfect for a short getaway! ✨</Text>
-            <Text style={s.outTime}>10:30 AM  ✓✓</Text>
-          </View>
-          {(threads[name] || []).map((message, index) => <View key={index} style={s.sent}>
-            {message.photo && <Image source={message.photo} style={s.attached} />}
-            {!!message.text && <Text style={s.light}>{message.text}</Text>}
-            <Text style={s.outTime}>{message.time}</Text>
-          </View>)}
-          {!threads[name]?.length && <View accessible accessibilityLabel={name + " is typing"} style={s.incoming}>
-            <Image source={avatar} style={s.smallAvatar} /><View style={s.typing}>{["#6720ff", "#8242ff", "#a17aef"].map(color => <View key={color} style={[s.dot, { backgroundColor: color }]} />)}</View>
-          </View>}
-        </ScrollView>
-        <View style={[s.composer, { marginBottom: Platform.OS === "ios" && !keyboard ? 82 : 0 }]}>
-          <Control icon="gallery" label="View shared photos" onPress={() => setGallery(true)} />
-          <Control icon="attach" label="Attach photo" onPress={attach} />
-          <View style={s.inputBox}><TextInput value={draft} onChangeText={setDraft} accessibilityLabel="Message" placeholder="Type a message..." placeholderTextColor="#515472"
-            onSubmitEditing={() => send()} returnKeyType="send" style={s.input} />
-            <Pressable accessibilityLabel="Voice message" accessibilityRole="button" onPress={() => Alert.alert("Voice recording is unavailable in this demo.")} style={s.mic}><Image source={icons.mic} contentFit="contain" style={s.icon} /></Pressable>
-          </View>
-          <Pressable accessibilityRole="button" accessibilityLabel="Send message" disabled={!draft.trim()} onPress={() => send()} style={s.send}><FeedIcon name="send" color="white" size={20} /></Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Send message"
+            disabled={
+              sending || recording || !peer || !(draft.trim() || photos.length || voice || location)
+            }
+            onPress={submit}
+            style={s.send}
+          >
+            {sending ? <Text style={s.light}>…</Text> : <FeedIcon name="send" color="white" size={20} />}
+          </Pressable>
         </View>
       </View>
-      <Modal visible={gallery} animationType="slide" onRequestClose={() => setGallery(false)}>
-        <View style={[s.gallery, { paddingTop: insets.top + 12 }]}>
-          <View style={s.galleryHeader}><Text style={s.name}>Shared photos</Text><Pressable accessibilityRole="button" onPress={() => setGallery(false)}><Text style={s.done}>Done</Text></Pressable></View>
-          <ScrollView>{photos.map(source => <Image key={source} source={source} style={s.fullPhoto} />)}</ScrollView>
+      <Modal
+        visible={gallery !== null || entry !== null}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => {
+          setGallery(null);
+          setEntry(null);
+        }}
+      >
+        <View style={[s.gallery, { paddingTop: 24 }]}>
+          <View style={s.galleryHeader}>
+            <Text style={s.name}>{entry || "Shared photos"}</Text>
+            <Text
+              accessibilityRole="button"
+              style={s.done}
+              onPress={() => {
+                setGallery(null);
+                setEntry(null);
+              }}
+            >
+              Close
+            </Text>
+          </View>
+          {entry ? (
+            <>
+              <TextInput
+                autoFocus
+                style={[s.inputBox, { flex: 0, padding: 12 }]}
+                value={value}
+                onChangeText={setValue}
+                maxLength={entry === "Place" ? 120 : 1000}
+                autoCapitalize="none"
+                placeholder={entry === "Place" ? "Place name" : "Paste a meeting link"}
+              />
+              <Text accessibilityRole="button" onPress={applyEntry} style={s.done}>
+                Add to message
+              </Text>
+            </>
+          ) : (
+            <ScrollView>
+              {gallery?.length ? (
+                gallery.map((uri, i) => (
+                  <Image key={uri + i} source={uri} contentFit="contain" style={s.fullPhoto} />
+                ))
+              ) : (
+                <Text style={s.meta}>No shared photos in the loaded messages.</Text>
+              )}
+            </ScrollView>
+          )}
         </View>
       </Modal>
     </KeyboardAvoidingView>
   );
 }
-
-const s = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: "#fcfbfe" },
-  header: { paddingBottom: 34, backgroundColor: "#eae3fb", backgroundImage: "linear-gradient(160deg,#d6d9fc,#f5eafa 85%,#ffe1e6)" },
-  mountains: { position: "absolute", bottom: 0, left: 0, width: "100%", height: 44 },
-  toolbar: { flexDirection: "row", alignItems: "center", gap: 6, minHeight: 46 },
-  control: { width: 35, height: 35, borderRadius: 20, justifyContent: "center", alignItems: "center", backgroundColor: "#ffffffbc" },
-  composerButton: { backgroundColor: "#f0edf6", borderRadius: 14, height: 38, width: 38 },
-  icon: { width: 19, height: 19 },
-  avatar: { width: 44, height: 44, borderRadius: 22 }, onlineDot: { position: "absolute", right: 0, bottom: 1, width: 11, height: 11, borderRadius: 6, backgroundColor: "#12c943", borderColor: "white", borderWidth: 1.3 },
-  identity: { flex: 1, minWidth: 0, gap: 1 }, name: { color: "#100e18", fontSize: 17, fontWeight: "700" }, status: { color: "#414661", fontSize: 12 }, green: { color: "#10c943" },
-  page: { flex: 1, width: "100%", maxWidth: 570, alignSelf: "center" },
-  history: { paddingHorizontal: 11, paddingVertical: 8, gap: 6 },
-  day: { alignSelf: "center", paddingHorizontal: 11, paddingVertical: 3, backgroundColor: "#eae6f3", borderRadius: 12, overflow: "hidden", fontSize: 12, color: "#484964" },
-  incoming: { flexDirection: "row", alignItems: "flex-end", gap: 7 }, smallAvatar: { width: 35, height: 35, borderRadius: 18 },
-  received: { maxWidth: "80%", backgroundColor: "#efecf5", borderRadius: 18, paddingHorizontal: 15, paddingVertical: 7 },
-  body: { fontSize: 14.5, lineHeight: 17, color: "#111017" },
-  inTime: { marginLeft: 54, marginTop: 2, color: "#515877", fontSize: 10 },
-  sent: { alignSelf: "flex-end", maxWidth: "69%", borderRadius: 18, backgroundColor: "#6728f5", backgroundImage: "linear-gradient(120deg,#7939fa,#5a18fa)", paddingHorizontal: 16, paddingTop: 7, paddingBottom: 5 },
-  light: { fontSize: 14.5, lineHeight: 17.5, color: "#fff" }, outTime: { alignSelf: "flex-end", color: "#fff", fontSize: 10 },
-  collage: { alignSelf: "flex-end", width: "79%", aspectRatio: 2.22, flexDirection: "row", gap: 4, borderRadius: 18, overflow: "hidden" },
-  mainPhoto: { flex: 1.62, borderRadius: 4 }, thumbnails: { flex: 1, gap: 4 }, thumbnail: { flex: 1, borderRadius: 4, overflow: "hidden" },
-  morePhotos: { flex: 1, textAlign: "right", paddingTop: "23%", paddingRight: 10, backgroundColor: "#100e284f", color: "white", fontSize: 17, fontWeight: "700" },
-  photoTime: { alignSelf: "flex-end", marginTop: 3, fontSize: 10, color: "#515877" },
-  locationBubble: { maxWidth: "66%" }, place: { alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 3, marginBottom: 4, backgroundColor: "#ffffff33", borderRadius: 14 }, placeText: { fontSize: 13, color: "white", flexShrink: 1 },
-  typing: { flexDirection: "row", gap: 4, paddingHorizontal: 14, height: 33, borderRadius: 18, backgroundColor: "#efecf5", alignItems: "center" }, dot: { width: 6, height: 6, borderRadius: 3 },
-  composer: { flexDirection: "row", gap: 7, alignItems: "center", paddingHorizontal: 10, paddingVertical: 7, backgroundColor: "#fcfbfe" },
-  inputBox: { flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", borderRadius: 24, backgroundColor: "#f0edf7", borderColor: "#dedced", borderWidth: 1 },
-  input: { flex: 1, minWidth: 0, height: 37, color: "#161421", paddingLeft: 13, fontSize: 14 },
-  mic: { paddingHorizontal: 9 }, send: { width: 40, height: 38, backgroundColor: "#7132fc", borderRadius: 22, justifyContent: "center", alignItems: "center" },
-  gallery: { flex: 1, paddingHorizontal: 14, backgroundColor: "#fcfbfe" }, galleryHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }, done: { color: "#6927f4", padding: 8 }, fullPhoto: { width: "100%", height: 240, borderRadius: 16, marginBottom: 10 }, attached: { width: 160, height: 120, borderRadius: 12 },
-});

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="854" viewBox="0 0 400 854" preserveAspectRatio="none">
+  <defs>
+    <linearGradient id="page" x2="0" y2="1" gradientUnits="objectBoundingBox">
+      <stop stop-color="#f4f3fc"/><stop offset=".38" stop-color="#fbfaff"/><stop offset="1" stop-color="#f8f6fd"/>
+    </linearGradient>
+    <linearGradient id="wave"><stop stop-color="#ede8fe"/><stop offset="1" stop-color="#dcd4fb"/></linearGradient>
+    <linearGradient id="front"><stop stop-color="#ded5ff"/><stop offset="1" stop-color="#c5b3fa"/></linearGradient>
+  </defs>
+  <path fill="url(#page)" d="M0 0h400v854H0z"/>
+  <path fill="#eae5fc" d="M0 786c65 7 103 44 184 36l4 32H0z"/>
+  <path fill="url(#wave)" d="M0 845c108 7 173-26 253-54s108-28 147-16v79H0z"/>
+  <path fill="url(#front)" d="M178 854c85-32 153-73 222-47v47z"/>
+</svg>

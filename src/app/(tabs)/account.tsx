@@ -2,10 +2,16 @@ import { useAuth, useUser } from "@clerk/expo";
 import { Image } from "expo-image";
 import { StatusBar } from "expo-status-bar";
 import { useState } from "react";
-import { Modal, Pressable, ScrollView, Share, StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import { Button, Modal, Pressable, ScrollView, Share, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { accent, FeedIcon } from "../../components/home/FeedIcon";
-import { posts } from "../../components/home/content";
+import { usePaginatedQuery, useQuery } from "convex/react";
+import { api } from "../../../convex/_generated/api";
+import type { Id } from "../../../convex/_generated/dataModel";
+import { SavedPostLink } from "../../components/social/SavedPostLink";
+import { useSocialSession } from "../../components/social/SocialSession";
+import { PostDialog } from "../../components/social/PostDialog";
+import { PostTile } from "../../components/social/PostTile";
 import { useSavedPosts } from "../../components/home/SavedPosts";
 import { highlights, photos, sections } from "../../components/profile/media";
 
@@ -56,7 +62,11 @@ export default function AccountScreen() {
       setBusy(false);
     }
   }
-  const stats = [["324", "Posts"], ["12.8K", "Followers"], ["287", "Following"]];
+  const connection = useSocialSession();
+  const me = useQuery(api.social.me, connection.ready ? {} : "skip");
+  const mine = usePaginatedQuery(api.social.feed, connection.ready ? { scope: "mine" } : "skip", { initialNumItems: 18 });
+  const [postId, setPostId] = useState<Id<"posts">>();
+  const stats = [[String(me?.posts ?? "…"), "Posts"], [String(me?.followers ?? "…"), "Followers"], [String(me?.followingCount ?? "…"), "Following"]];
   return (
     <View style={s.screen}>
       <StatusBar style="dark" />
@@ -106,10 +116,15 @@ export default function AccountScreen() {
                 <Image source={item.icon} style={s.icon} tintColor={section === item.label ? accent : "#596071"} /><Text style={[s.tabLabel, section === item.label && { color: accent }]}>{item.label}</Text>{section === item.label && <View style={s.line} />}
               </Pressable>)}
             </View>
-            {section === "Posts" ? <View style={s.grid}>{photos.map(item => <Pressable key={item.label} accessibilityRole="button" accessibilityLabel={item.label} onPress={() => preview(item)} style={{ width: Math.floor((page - 20) / 3), aspectRatio: 1.25 }}><Image source={item.image} style={s.tile} /></Pressable>)}</View> : <Text style={s.empty}>{section === "Reels" ? "No reels yet" : "No tagged posts yet"}</Text>}
+            {section === "Posts" ? <>
+              <View style={s.grid}>{mine.results.map(post => <PostTile key={post.id} post={post} width={Math.floor((page - 20) / 3)} onPress={() => setPostId(post.id)} />)}</View>
+              {!mine.results.length && <Text style={s.empty}>{!connection.ready ? connection.message : mine.status === "LoadingFirstPage" ? "Loading posts…" : "No posts yet"}</Text>}
+              {mine.status === "CanLoadMore" && <Button title="More posts" onPress={() => mine.loadMore(18)} />}
+            </> : <Text style={s.empty}>{section === "Reels" ? "No reels yet" : "No tagged posts yet"}</Text>}
           </View>
         </View>
       </ScrollView>
+      {connection.ready && postId && <PostDialog showPost postId={postId} close={() => setPostId(undefined)} />}
       <Modal visible={!!panel} transparent animationType="fade" onRequestClose={() => setPanel("")}>
         <View style={s.backdrop}><View style={s.dialog}>
           <Text style={s.name}>{panel}</Text>
@@ -117,12 +132,8 @@ export default function AccountScreen() {
           {panel === "Account" && <Text>{user?.primaryEmailAddress?.emailAddress}</Text>}
           {panel === "Account" && <Pressable accessibilityRole="button" disabled={busy} onPress={submit}><Text style={s.editLabel}>{busy ? "Please wait…" : "Sign out"}</Text></Pressable>}
           {panel === "Notifications" && <Text>No new notifications</Text>}
-          {panel === "Saved posts" && (saved.ids.length === 0 ? <Text>Your saved collection is empty.</Text> :
-            posts.filter(post => saved.ids.includes(post.id)).map(post => (
-              <Pressable key={post.id} accessibilityRole="button" onPress={() => preview({ label: post.description, image: post.photo })}>
-                <Text style={s.editLabel}>{post.author} · {post.location}</Text>
-              </Pressable>
-            )))}
+          {connection.ready && panel === "Saved posts" && (saved.ids.length === 0 ? <Text>Your saved collection is empty.</Text> :
+            saved.ids.map(id => <SavedPostLink key={id} id={id} open={() => { setPanel(""); setPostId(id); }} />))}
           {panel === "New highlight" && <Text>Add a story to create a highlight.</Text>}
           {!!error && <Text accessibilityRole="alert">{error}</Text>}
           <Pressable accessibilityRole="button" onPress={() => setPanel("")}><Text style={s.handle}>Close</Text></Pressable>

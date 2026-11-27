@@ -1,10 +1,12 @@
 import { createContext, useContext, useState, type ReactNode } from "react";
 
-const SavedPosts = createContext<{ ids: string[]; toggle: (id: string) => void } | null>(null);
+import type { Id } from "../../../convex/_generated/dataModel";
+
+const SavedPosts = createContext<{ ids: Id<"posts">[]; toggle: (id: Id<"posts">) => void } | null>(null);
 
 export function SavedPostsProvider({ children }: { children: ReactNode }) {
-  const [ids, setIds] = useState<string[]>([]);
-  function toggle(id: string) {
+  const [ids, setIds] = useState<Id<"posts">[]>([]);
+  function toggle(id: Id<"posts">) {
     setIds(current => current.includes(id) ? current.filter(item => item !== id) : [...current, id]);
   }
   return <SavedPosts.Provider value={{ ids, toggle }}>{children}</SavedPosts.Provider>;

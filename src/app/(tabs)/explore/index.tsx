@@ -2,11 +2,18 @@ import { Image } from "expo-image";
 import { router } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useState } from "react";
-import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from "react-native";
+import { Button, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { categories, people, tiles } from "../../components/explore/content";
-import { accent, FeedIcon } from "../../components/home/FeedIcon";
-import { useSessionProfile } from "../../components/profile/SessionProfile";
+import { usePaginatedQuery } from "convex/react";
+import { api } from "../../../../convex/_generated/api";
+import type { Id } from "../../../../convex/_generated/dataModel";
+import { FollowButton } from "../../../components/social/FollowButton";
+import { PostTile } from "../../../components/social/PostTile";
+import { useSocialSession } from "../../../components/social/SocialSession";
+import { PostDialog } from "../../../components/social/PostDialog";
+import { categories } from "../../../components/explore/content";
+import { accent, FeedIcon } from "../../../components/home/FeedIcon";
+import { useSessionProfile } from "../../../components/profile/SessionProfile";
 
 export default function ExploreScreen() {
   const { profile } = useSessionProfile();
@@ -16,21 +23,19 @@ export default function ExploreScreen() {
   const u = page / 812;
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<string>("For You");
-  const [following, setFollowing] = useState<string[]>([]);
   const [panel, setPanel] = useState("");
-  const [preview, setPreview] = useState<(typeof tiles)[number]>();
+  const [postId, setPostId] = useState<Id<"posts">>();
+  const connection = useSocialSession();
+  const people = usePaginatedQuery(api.social.people, connection.ready ? {} : "skip", { initialNumItems: 16 });
+  const posts = usePaginatedQuery(api.social.feed, connection.ready ? { scope: "recent" } : "skip", { initialNumItems: 18 });
   const term = query.trim().toLowerCase();
-  const matches = tiles.filter(item => (category === "For You" || item.tags.includes(category.toLowerCase())) &&
-    (item.label + " " + item.tags).toLowerCase().includes(term));
-  const suggested = people.filter(item => item.name.toLowerCase().includes(term));
-  const showPeople = (category === "For You" || category === "People") && suggested.length > 0;
-
-  function toggle(name: string) {
-    setFollowing(current => current.includes(name) ? current.filter(item => item !== name) : [...current, name]);
-  }
+  const matches = posts.results.filter(item =>
+    (category === "For You" || item.caption.toLowerCase().includes(category.toLowerCase())) &&
+    (item.author.name + " " + item.caption).toLowerCase().includes(term));
+  const suggested = people.results.filter(item => (item.name + " " + item.handle).toLowerCase().includes(term));
+  const showPeople = category === "For You" || category === "People";
   function close() {
     setPanel("");
-    setPreview(undefined);
   }
   return (
     <View style={[s.screen, { paddingTop: insets.top, paddingLeft: insets.left, paddingRight: insets.right }]}>
@@ -38,19 +43,19 @@ export default function ExploreScreen() {
       <ScrollView keyboardShouldPersistTaps="handled" automaticallyAdjustContentInsets={false} contentInsetAdjustmentBehavior="never" showsVerticalScrollIndicator={false} contentContainerStyle={{ alignItems: "center", paddingBottom: insets.bottom + 80 }}>
         <View style={{ width: page }}>
           <View style={s.header}>
-            <Image source={require("../../../assets/images/snaply-launch-mark.png")} style={s.logo} />
+            <Image source={require("../../../../assets/images/snaply-launch-mark.png")} style={s.logo} />
             <Text style={s.brand}>Snaply</Text>
             <Pressable accessibilityRole="button" accessibilityLabel="Notifications" onPress={() => setPanel("Notifications")} style={s.headerButton}>
-              <Image source={require("../../../assets/images/profile/bell.png")} tintColor="#0e0d17" style={s.bell} /><View style={s.dot} />
+              <Image source={require("../../../../assets/images/profile/bell.png")} tintColor="#0e0d17" style={s.bell} /><View style={s.dot} />
             </Pressable>
             <Pressable accessibilityRole="button" accessibilityLabel="Open profile" onPress={() => router.navigate("/account")} style={s.headerButton}>
-              <Image source={profile.photo || require("../../../assets/images/home/avatar.jpg")} style={s.avatar} />
+              <Image source={profile.photo || require("../../../../assets/images/home/avatar.jpg")} style={s.avatar} />
             </Pressable>
           </View>
           <View style={s.search}>
             <FeedIcon name="search" size={17} />
             <TextInput accessibilityLabel="Search people and posts" value={query} onChangeText={setQuery} returnKeyType="search" placeholder="Search people, posts and more" placeholderTextColor="#656383" style={s.input} />
-            <Pressable accessibilityLabel="Filter Explore" accessibilityRole="button" onPress={() => setPanel("Filter Explore")} style={s.filterButton}><Image source={require("../../../assets/images/explore/filter.png")} tintColor={accent} style={s.filterIcon} /></Pressable>
+            <Pressable accessibilityLabel="Filter Explore" accessibilityRole="button" onPress={() => setPanel("Filter Explore")} style={s.filterButton}><Image source={require("../../../../assets/images/explore/filter.png")} tintColor={accent} style={s.filterIcon} /></Pressable>
           </View>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.chips}>
             {categories.map(item => <Pressable key={item.name} accessibilityRole="button" accessibilityState={{ selected: category === item.name }} onPress={() => setCategory(item.name)} style={[s.chip, { minWidth: Math.max(65, (item.name === "Nature" || item.name === "People" ? 153 : 143) * u) }, category === item.name && s.purple]}>
@@ -59,33 +64,30 @@ export default function ExploreScreen() {
             </Pressable>)}
           </ScrollView>
           {showPeople && <>
-            <View style={s.sectionHeader}><Text style={s.heading}>Suggested People</Text><Pressable accessibilityRole="button" onPress={() => setPanel("Suggested People")}><Text style={s.seeAll}>See All</Text></Pressable></View>
+            <View style={s.sectionHeader}><Text style={s.heading}>Suggested People</Text><Pressable accessibilityRole="button" onPress={() => router.push({ pathname: "/explore/suggested-people", params: { query: query.trim() } })}><Text style={s.seeAll}>See All</Text></Pressable></View>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.people}>
-              {suggested.map(person => <View key={person.name} style={[s.card, { width: Math.max(86, (person === people[0] ? 192 : 181) * u) }]}>
-                <Image source={person.image} style={s.personImage} />
+              {suggested.map(person => <View key={person.id} style={[s.card, { width: Math.max(86, (person === suggested[0] ? 192 : 181) * u) }]}>
+                <Image source={person.avatar || require("../../../../assets/images/home/avatar.jpg")} style={s.personImage} />
                 <Text style={s.personName} numberOfLines={1} adjustsFontSizeToFit>{person.name}</Text>
                 <Text style={s.followers} numberOfLines={1} adjustsFontSizeToFit>{person.followers} followers</Text>
-                <Pressable accessibilityRole="button" accessibilityLabel={(following.includes(person.name) ? "Unfollow " : "Follow ") + person.name} onPress={() => toggle(person.name)} style={[s.follow, s.purple]}><Text style={s.followLabel}>{following.includes(person.name) ? "Following" : "Follow"}</Text></Pressable>
+                <FollowButton person={person} compact />
               </View>)}
             </ScrollView>
           </>}
+          {showPeople && !suggested.length && <Text style={s.empty}>{!connection.ready ? connection.message : people.status === "LoadingFirstPage" ? "Loading people…" : "No people found"}</Text>}
           {!!matches.length && <>
-            <View style={s.sectionHeader}><Text style={s.heading}>Trending Posts</Text></View>
-            <View style={s.grid}>{[268, 254, 252].map((weight, col) => <View key={col} style={[s.column, { flex: weight }]}>
-              {matches.filter((_, i) => i % 3 === col).map(tile => <Pressable key={tile.label} accessibilityRole="button" accessibilityLabel={tile.label} onPress={() => setPreview(tile)}>
-                <Image source={tile.image} style={{ width: "100%", aspectRatio: tile.ratio, borderRadius: 11 }} />
-              </Pressable>)}
-            </View>)}</View>
+            <View style={s.sectionHeader}><Text style={s.heading}>Recent Posts</Text></View>
+            <View style={s.grid}>{matches.map(post => <PostTile key={post.id} post={post} width={Math.floor((page - 20) / 3)} onPress={() => setPostId(post.id)} />)}</View>
           </>}
-          {!matches.length && !showPeople && <Text style={s.empty}>No matching people or posts</Text>}
+          {connection.ready && !matches.length && <Text style={s.empty}>{posts.status === "LoadingFirstPage" ? "Loading posts…" : "No matching posts"}</Text>}
+          {posts.status === "CanLoadMore" && <Button title="More posts" onPress={() => posts.loadMore(18)} />}
         </View>
       </ScrollView>
-      <Modal visible={!!panel || !!preview} transparent animationType="fade" onRequestClose={close}>
+      {connection.ready && postId && <PostDialog showPost postId={postId} close={() => setPostId(undefined)} />}
+      <Modal visible={!!panel} transparent animationType="fade" onRequestClose={close}>
         <View style={s.overlay}><View style={s.dialog}>
-          <Text style={s.heading}>{preview?.label || panel}</Text>
-          {preview && <Image source={preview.image} style={{ width: "100%", aspectRatio: preview.ratio, borderRadius: 12 }} />}
+          <Text style={s.heading}>{panel}</Text>
           {panel === "Notifications" && <Text>No new notifications</Text>}
-          {panel === "Suggested People" && people.map(person => <View key={person.name} style={s.listRow}><Image source={person.image} style={s.avatar} /><Text style={s.personName}>{person.name}</Text><Pressable accessibilityRole="button" onPress={() => toggle(person.name)}><Text style={s.seeAll}>{following.includes(person.name) ? "Following" : "Follow"}</Text></Pressable></View>)}
           {panel === "Filter Explore" && categories.map(item => <Pressable key={item.name} onPress={() => { setCategory(item.name); close(); }} accessibilityRole="button" accessibilityState={{ selected: category === item.name }}><Text style={s.chipText}>{item.name}</Text></Pressable>)}
           <Pressable accessibilityRole="button" onPress={close}><Text style={s.seeAll}>Close</Text></Pressable>
         </View></View>
@@ -104,5 +106,5 @@ const s = StyleSheet.create({
   chips: { flexDirection: "row", gap: 5, paddingLeft: 10, paddingRight: 6, paddingTop: 12 }, chip: { minHeight: 33, paddingHorizontal: 8, borderRadius: 20, backgroundColor: "#f2f0f9", borderWidth: 0.6, borderColor: "#dcd6fc", flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5 }, chipIcon: { width: 13, height: 13 }, chipText: { fontSize: 12, color: "#12101c", fontWeight: "500" }, white: { color: "white" }, purple: { backgroundColor: accent, backgroundImage: "linear-gradient(170deg, #b169fb, #592aff)", borderWidth: 0 },
   sectionHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginHorizontal: 10, marginTop: 17, marginBottom: 9 }, heading: { color: "#0c0b18", fontSize: 17, fontWeight: "800", letterSpacing: -0.6 }, seeAll: { color: accent, fontSize: 13, fontWeight: "600" },
   people: { gap: 7, paddingHorizontal: 10, paddingVertical: 2, paddingBottom: 3 }, card: { alignItems: "center", paddingHorizontal: 6, paddingTop: 6, paddingBottom: 9, borderRadius: 15, backgroundColor: "#fbfafd", boxShadow: "0px 3px 8px #7955e629" }, personImage: { width: 56, height: 56, borderRadius: 28 }, personName: { marginTop: 3, fontSize: 12, fontWeight: "700", letterSpacing: -0.35, color: "#100f1b" }, followers: { fontSize: 10, marginTop: 3, color: "#4d4a6f" }, follow: { width: "92%", marginTop: 6, borderRadius: 18, minHeight: 24, alignItems: "center", justifyContent: "center" }, followLabel: { fontSize: 12, fontWeight: "500", color: "white" },
-  grid: { flexDirection: "row", gap: 3, paddingHorizontal: 6 }, column: { gap: 4 }, empty: { textAlign: "center", padding: 24 }, overlay: { flex: 1, justifyContent: "center", padding: 24, backgroundColor: "#17132688" }, dialog: { alignSelf: "center", width: "100%", maxWidth: 400, backgroundColor: "white", padding: 20, borderRadius: 20, gap: 15 }, listRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 6 },
+  grid: { flexWrap: "wrap", flexDirection: "row", gap: 3, paddingHorizontal: 6 }, column: { gap: 4 }, empty: { textAlign: "center", padding: 24 }, overlay: { flex: 1, justifyContent: "center", padding: 24, backgroundColor: "#17132688" }, dialog: { alignSelf: "center", width: "100%", maxWidth: 400, backgroundColor: "white", padding: 20, borderRadius: 20, gap: 15 }, listRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 6 },
 });
