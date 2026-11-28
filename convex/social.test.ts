@@ -56,6 +56,22 @@ test("publishes only verified uploads owned by the caller and handles retries", 
   expect((await reader.query(social.feed, { scope: "mine", paginationOpts })).page).toHaveLength(0);
 });
 
+test("updates an existing post's avatar for both its author and another viewer", async () => {
+  const { owner, reader, upload } = await setup();
+  const postId = await owner.mutation(social.publish, await upload());
+  const { uploadId, storageId } = await upload();
+  const file = { uploadId, storageId };
+  await expect(reader.mutation(social.setProfilePhoto, file)).rejects.toThrow();
+  await owner.mutation(social.setProfilePhoto, file);
+  await owner.mutation(social.setProfilePhoto, file);
+  const avatar = (await owner.query(social.me))?.avatar;
+  expect(avatar).toBeTruthy();
+  for (const user of [owner, reader]) {
+    expect((await user.query(social.getPost, { postId }))?.author.avatar).toBe(avatar);
+    expect((await user.query(social.feed, { scope: "recent", paginationOpts })).page[0].author.avatar).toBe(avatar);
+  }
+});
+
 test("applies size, media and video duration limits at the upload boundary", async () => {
   const { owner } = await setup();
   const max = 100 * 1024 * 1024;

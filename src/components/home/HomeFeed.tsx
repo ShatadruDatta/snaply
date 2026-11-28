@@ -11,11 +11,14 @@ import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { useSocialSession } from "../social/SocialSession";
 import { PostDialog } from "../social/PostDialog";
+import { useTabBarClearance } from "../navigation/GlassTabs";
+import { ProfileAvatar } from "../profile/ProfileAvatar";
 import { stories } from "./content";
 
 const filters = ["For You", "Following", "Trending"] as const;
 export function HomeFeed() {
   const insets = useSafeAreaInsets();
+  const tabBarClearance = useTabBarClearance();
   const { width } = useWindowDimensions();
   const storySize = Math.min(65, Math.max(54, (width - 75) / 5));
   const feed = useRef<FlatList>(null);
@@ -54,7 +57,7 @@ export function HomeFeed() {
             <FeedIcon name="search" size={21} />
           </Pressable>
           <Pressable accessibilityRole="button" accessibilityLabel="Open profile" onPress={() => router.push("/account")} style={styles.headerButton}>
-            <Image source={require("../../../assets/images/home/avatar.jpg")} style={styles.profile} />
+            <ProfileAvatar style={styles.profile} />
           </Pressable>
         </View>
         {searching && (
@@ -64,6 +67,7 @@ export function HomeFeed() {
           </View>
         )}
         <FlatList ref={feed} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} style={styles.feed}
+          contentContainerStyle={{ paddingBottom: tabBarClearance + 8 }}
           data={visible} keyExtractor={post => post.id}
           renderItem={({ item }) => <PostCard post={item} openComments={() => setPostId(item.id)} />}
           ListEmptyComponent={<Text style={styles.empty}>{!connection.ready ? connection.message : status === "LoadingFirstPage" ? "Loading posts…" : query ? "No matching posts" :

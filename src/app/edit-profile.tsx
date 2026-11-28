@@ -1,6 +1,10 @@
+import { useMutation } from "convex/react";
+import { api } from "../../convex/_generated/api";
+import { uploadMedia } from "../components/social/upload";
 import { useUser } from "@clerk/expo";
 import { Image } from "expo-image";
-import * as ImagePicker from "expo-image-picker";
+import { pickProfilePhoto, ProfilePhotoMenu, useProfilePhotoMenu, type PhotoSource } from "../components/profile/ProfilePhotoMenu";
+import type * as ImagePicker from "expo-image-picker";
 import { Redirect, router, usePreventRemove } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useRef, useState } from "react";
@@ -23,10 +27,16 @@ function Editor() {
   const [leaving, setLeaving] = useState(false);
   const [confirm, setConfirm] = useState(false);
   const [photoError, setPhotoError] = useState("");
+  const beginUpload = useMutation(api.social.beginUpload);
+  const setProfilePhoto = useMutation(api.social.setProfilePhoto);
+  const [selected, setSelected] = useState<ImagePicker.ImagePickerAsset | null>(null);
+  const saving = useRef(false);
+  const [busy, setBusy] = useState(false);
+  const { screenRef, badgeRef, menu, close, openPhotoMenu } = useProfilePhotoMenu();
   const picking = useRef(false);
   const pendingExit = useRef<() => void>(() => {});
   const insets = useSafeAreaInsets();
-  const dirty = (Object.keys(profile) as (keyof Profile)[]).some(key => draft[key] !== profile[key]);
+  const dirty = (Object.keys(profile) as (keyof Profile)[]).some(key => key === "photo" ? !!selected : draft[key] !== profile[key]);
   const disableGuard = usePreventRemove(dirty && !leaving, ({ repeat }) => {
     Keyboard.dismiss();
     pendingExit.current = repeat;
@@ -41,23 +51,42 @@ function Editor() {
   function field<K extends keyof Profile>(key: K, value: Profile[K]) {
     setDraft(current => ({ ...current, [key]: value }));
   }
-  async function pickPhoto() {
+  async function pickPhoto(source: PhotoSource) {
     if (picking.current) return;
     picking.current = true;
     setPhotoError("");
     try {
-      const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], allowsEditing: true, aspect: [1, 1], quality: 0.85 });
-      if (!result.canceled && result.assets[0]) field("photo", result.assets[0].uri);
+      const asset = await pickProfilePhoto(source);
+      if (asset) {
+        setSelected(asset);
+        field("photo", asset.uri);
+      }
     } catch {
       setPhotoError("Couldn’t open that photo. Try choosing it again.");
     } finally {
       picking.current = false;
     }
   }
-  function commit() {
+  async function commit() {
     setSubmitted(true);
     if (!validName || !validHandle || draft.bio.length > 160) return;
+    if (saving.current || picking.current) return;
+    saving.current = true;
+    setBusy(true);
+    setPhotoError("");
     Keyboard.dismiss();
+    try {
+      if (selected) {
+        const file = await uploadMedia(selected, beginUpload, () => {});
+        await setProfilePhoto(file);
+      }
+    } catch {
+      setPhotoError("Couldn’t save your profile photo. Please try again.");
+      return;
+    } finally {
+      saving.current = false;
+      setBusy(false);
+    }
     disableGuard();
     setLeaving(true);
     save({ ...draft, name: draft.name.trim(), handle: draft.handle.trim(), bio: draft.bio.trim() });
@@ -65,6 +94,7 @@ function Editor() {
   }
   return (
     <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={s.screen}>
+      <View ref={screenRef} collapsable={false} style={s.screen}>
       <StatusBar style="dark" />
       <Image source={require("../../assets/images/profile/editor-background.svg")} contentFit="fill" style={StyleSheet.absoluteFill} />
       <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={[s.scroll, { paddingTop: insets.top, paddingBottom: insets.bottom + 26 }]}>
@@ -73,8 +103,8 @@ function Editor() {
             <Pressable accessibilityRole="button" accessibilityLabel="Back to profile" onPress={back} style={s.back}><Text style={s.chevron}>‹</Text></Pressable>
             <Text accessibilityRole="header" style={s.title}>Edit Profile</Text>
           </View>
-          <Pressable accessibilityLabel="Choose profile photo" accessibilityRole="button" onPress={pickPhoto} style={s.ring}>
-            <Image source={draft.photo || defaultPortrait} style={s.avatar} />
+          <Pressable accessibilityLabel="Choose profile photo" accessibilityRole="button" ref={badgeRef} accessibilityState={{ expanded: !!menu }} disabled={busy} onPress={openPhotoMenu} style={s.ring}>
+            <Image source={(selected ? draft.photo : profile.photo) || defaultPortrait} style={s.avatar} />
             <Image source={require("../../assets/images/profile/camera.png")} style={s.camera} />
           </Pressable>
           {!!photoError && <Text accessibilityRole="alert" style={s.error}>{photoError}</Text>}
@@ -94,9 +124,10 @@ function Editor() {
               {key === "bio" && <Text style={s.counter}>{draft.bio.length} / 160</Text>}
             </View>;
           })}
-          <Pressable onPress={commit} accessibilityRole="button" style={s.save}><Text style={s.saveText}>Save Changes</Text></Pressable>
+          <Pressable disabled={busy} onPress={commit} accessibilityRole="button" style={s.save}><Text style={s.saveText}>{busy ? "Saving…" : "Save Changes"}</Text></Pressable>
         </View>
       </ScrollView>
+      <ProfilePhotoMenu menu={menu} close={close} onChoose={pickPhoto} />
       <Modal visible={confirm} transparent animationType="fade" onRequestClose={() => setConfirm(false)}>
         <View style={s.overlay}><View style={s.dialog}>
           <Text style={s.title}>Discard changes?</Text>
@@ -105,6 +136,7 @@ function Editor() {
           <Pressable accessibilityRole="button" style={s.choice} onPress={() => { setConfirm(false); setLeaving(true); disableGuard(); pendingExit.current(); }}><Text style={s.error}>Discard changes</Text></Pressable>
         </View></View>
       </Modal>
+      </View>
     </KeyboardAvoidingView>
   );
 }

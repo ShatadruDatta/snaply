@@ -2,7 +2,7 @@ import { Image } from "expo-image";
 import { router } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useState } from "react";
-import { Button, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from "react-native";
+import { ActivityIndicator, FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { usePaginatedQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
@@ -13,12 +13,13 @@ import { useSocialSession } from "../../../components/social/SocialSession";
 import { PostDialog } from "../../../components/social/PostDialog";
 import { categories } from "../../../components/explore/content";
 import { accent, FeedIcon } from "../../../components/home/FeedIcon";
-import { useSessionProfile } from "../../../components/profile/SessionProfile";
+import { useTabBarClearance } from "../../../components/navigation/GlassTabs";
+import { ProfileAvatar } from "../../../components/profile/ProfileAvatar";
 
 export default function ExploreScreen() {
-  const { profile } = useSessionProfile();
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
+  const tabBarClearance = useTabBarClearance();
   const page = Math.min(width - insets.left - insets.right, 550);
   const u = page / 812;
   const [query, setQuery] = useState("");
@@ -40,8 +41,25 @@ export default function ExploreScreen() {
   return (
     <View style={[s.screen, { paddingTop: insets.top, paddingLeft: insets.left, paddingRight: insets.right }]}>
       <StatusBar style="dark" />
-      <ScrollView keyboardShouldPersistTaps="handled" automaticallyAdjustContentInsets={false} contentInsetAdjustmentBehavior="never" showsVerticalScrollIndicator={false} contentContainerStyle={{ alignItems: "center", paddingBottom: insets.bottom + 80 }}>
-        <View style={{ width: page }}>
+      <FlatList
+        data={matches}
+        numColumns={3}
+        keyExtractor={post => post.id}
+        style={{ width: page, alignSelf: "center" }}
+        contentContainerStyle={{ paddingBottom: tabBarClearance + 10 }}
+        columnWrapperStyle={s.grid}
+        keyboardShouldPersistTaps="handled"
+        automaticallyAdjustContentInsets={false}
+        contentInsetAdjustmentBehavior="never"
+        showsVerticalScrollIndicator={false}
+        onEndReachedThreshold={0.2}
+        onEndReached={() => {
+          if (posts.status === "CanLoadMore") posts.loadMore(18);
+        }}
+        renderItem={({ item }) => (
+          <PostTile post={item} width={Math.floor((page - 20) / 3)} onPress={() => setPostId(item.id)} />
+        )}
+        ListHeaderComponent={<>
           <View style={s.header}>
             <Image source={require("../../../../assets/images/snaply-launch-mark.png")} style={s.logo} />
             <Text style={s.brand}>Snaply</Text>
@@ -49,7 +67,7 @@ export default function ExploreScreen() {
               <Image source={require("../../../../assets/images/profile/bell.png")} tintColor="#0e0d17" style={s.bell} /><View style={s.dot} />
             </Pressable>
             <Pressable accessibilityRole="button" accessibilityLabel="Open profile" onPress={() => router.navigate("/account")} style={s.headerButton}>
-              <Image source={profile.photo || require("../../../../assets/images/home/avatar.jpg")} style={s.avatar} />
+              <ProfileAvatar style={s.avatar} />
             </Pressable>
           </View>
           <View style={s.search}>
@@ -75,14 +93,22 @@ export default function ExploreScreen() {
             </ScrollView>
           </>}
           {showPeople && !suggested.length && <Text style={s.empty}>{!connection.ready ? connection.message : people.status === "LoadingFirstPage" ? "Loading people…" : "No people found"}</Text>}
-          {!!matches.length && <>
-            <View style={s.sectionHeader}><Text style={s.heading}>Recent Posts</Text></View>
-            <View style={s.grid}>{matches.map(post => <PostTile key={post.id} post={post} width={Math.floor((page - 20) / 3)} onPress={() => setPostId(post.id)} />)}</View>
-          </>}
-          {connection.ready && !matches.length && <Text style={s.empty}>{posts.status === "LoadingFirstPage" ? "Loading posts…" : "No matching posts"}</Text>}
-          {posts.status === "CanLoadMore" && <Button title="More posts" onPress={() => posts.loadMore(18)} />}
-        </View>
-      </ScrollView>
+          {!!matches.length && <View style={s.sectionHeader}><Text style={s.heading}>Recent Posts</Text></View>}
+        </>}
+        ListEmptyComponent={connection.ready && (posts.status === "LoadingFirstPage" || posts.status === "Exhausted")
+          ? <Text style={s.empty}>{posts.status === "LoadingFirstPage" ? "Loading posts…" : "No matching posts"}</Text>
+          : undefined}
+        ListFooterComponent={posts.status === "LoadingMore" ? (
+          <View accessible accessibilityRole="alert" accessibilityLiveRegion="polite"
+            accessibilityLabel="Loading more posts" style={s.loadingPanel}>
+            <View style={s.spinner}>
+              <View style={s.spinnerTrack} />
+              <ActivityIndicator size="small" color={accent} />
+            </View>
+            <Text style={s.loadingLabel}>Loading more posts...</Text>
+          </View>
+        ) : undefined}
+      />
       {connection.ready && postId && <PostDialog showPost postId={postId} close={() => setPostId(undefined)} />}
       <Modal visible={!!panel} transparent animationType="fade" onRequestClose={close}>
         <View style={s.overlay}><View style={s.dialog}>
@@ -106,5 +132,10 @@ const s = StyleSheet.create({
   chips: { flexDirection: "row", gap: 5, paddingLeft: 10, paddingRight: 6, paddingTop: 12 }, chip: { minHeight: 33, paddingHorizontal: 8, borderRadius: 20, backgroundColor: "#f2f0f9", borderWidth: 0.6, borderColor: "#dcd6fc", flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5 }, chipIcon: { width: 13, height: 13 }, chipText: { fontSize: 12, color: "#12101c", fontWeight: "500" }, white: { color: "white" }, purple: { backgroundColor: accent, backgroundImage: "linear-gradient(170deg, #b169fb, #592aff)", borderWidth: 0 },
   sectionHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginHorizontal: 10, marginTop: 17, marginBottom: 9 }, heading: { color: "#0c0b18", fontSize: 17, fontWeight: "800", letterSpacing: -0.6 }, seeAll: { color: accent, fontSize: 13, fontWeight: "600" },
   people: { gap: 7, paddingHorizontal: 10, paddingVertical: 2, paddingBottom: 3 }, card: { alignItems: "center", paddingHorizontal: 6, paddingTop: 6, paddingBottom: 9, borderRadius: 15, backgroundColor: "#fbfafd", boxShadow: "0px 3px 8px #7955e629" }, personImage: { width: 56, height: 56, borderRadius: 28 }, personName: { marginTop: 3, fontSize: 12, fontWeight: "700", letterSpacing: -0.35, color: "#100f1b" }, followers: { fontSize: 10, marginTop: 3, color: "#4d4a6f" }, follow: { width: "92%", marginTop: 6, borderRadius: 18, minHeight: 24, alignItems: "center", justifyContent: "center" }, followLabel: { fontSize: 12, fontWeight: "500", color: "white" },
-  grid: { flexWrap: "wrap", flexDirection: "row", gap: 3, paddingHorizontal: 6 }, column: { gap: 4 }, empty: { textAlign: "center", padding: 24 }, overlay: { flex: 1, justifyContent: "center", padding: 24, backgroundColor: "#17132688" }, dialog: { alignSelf: "center", width: "100%", maxWidth: 400, backgroundColor: "white", padding: 20, borderRadius: 20, gap: 15 }, listRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 6 },
+  grid: { gap: 3, paddingHorizontal: 6, marginBottom: 3 },
+  loadingPanel: { marginHorizontal: 6, marginVertical: 6, paddingVertical: 14, gap: 8, alignItems: "center", borderRadius: 12, backgroundColor: "#f8f7fc" },
+  spinner: { width: 20, height: 20, alignItems: "center", justifyContent: "center" },
+  spinnerTrack: { ...StyleSheet.absoluteFill, borderRadius: 10, borderWidth: 2, borderColor: "#e8defb" },
+  loadingLabel: { fontSize: 14, color: "#787489" },
+  empty: { textAlign: "center", padding: 24 }, overlay: { flex: 1, justifyContent: "center", padding: 24, backgroundColor: "#17132688" }, dialog: { alignSelf: "center", width: "100%", maxWidth: 400, backgroundColor: "white", padding: 20, borderRadius: 20, gap: 15 }, listRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 6 },
 });

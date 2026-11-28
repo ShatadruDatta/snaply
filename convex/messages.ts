@@ -3,7 +3,7 @@ import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
-import { uploadContentType, verifyFile, viewer } from "./social";
+import { profileAvatar, uploadContentType, verifyFile, viewer } from "./social";
 
 const contact = v.object({ id: v.id("profiles"), name: v.string(), handle: v.string(), avatar: v.union(v.string(), v.null()) });
 const attachment = v.object({ uploadId: v.id("uploads"), storageId: v.id("_storage") });
@@ -14,7 +14,9 @@ const lifetime = 24 * 60 * 60 * 1000;
 export function findPeer(ctx: QueryCtx, handle: string) {
   return ctx.db.query("profiles").withIndex("by_handle", q => q.eq("handle", handle)).unique();
 }
-function publicContact({ _id: id, name, handle, avatar }: Doc<"profiles">) {
+async function publicContact(ctx: QueryCtx, row: Doc<"profiles">) {
+  const { _id: id, name, handle } = row;
+  const avatar = await profileAvatar(ctx, row);
   return { id, name, handle, avatar };
 }
 export function pairKey(a: Id<"profiles">, b: Id<"profiles">) {
@@ -29,7 +31,7 @@ export const peer = query({
   handler: async (ctx, { handle }) => {
     const me = await viewer(ctx);
     const other = await findPeer(ctx, handle);
-    return other && other._id !== me._id ? publicContact(other) : null;
+    return other && other._id !== me._id ? publicContact(ctx, other) : null;
   },
 });
 export const inbox = query({
@@ -41,7 +43,7 @@ export const inbox = query({
       .order("desc").paginate(paginationOpts);
     const rows = await Promise.all(result.page.map(async row => {
       const person = await ctx.db.get("profiles", row.peerId);
-      return person && { peer: publicContact(person), text: row.text, updatedAt: row.updatedAt, unread: row.unread };
+      return person && { peer: await publicContact(ctx, person), text: row.text, updatedAt: row.updatedAt, unread: row.unread };
     }));
     return { ...result, page: rows.filter(row => row !== null) };
   },

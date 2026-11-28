@@ -12,6 +12,7 @@ export default defineSchema({
     clerkUserId: v.string(),
     handle: v.string(),
     name: v.string(),
+    avatarStorageId: v.optional(v.id("_storage")),
     avatar: v.union(v.null(), v.string()),
     followers: v.number(),
     followingCount: v.number(),

@@ -1,11 +1,12 @@
 import { useAuth, useUser } from "@clerk/expo";
 import { Image } from "expo-image";
+import { SymbolView } from "expo-symbols";
 import { StatusBar } from "expo-status-bar";
-import { useState } from "react";
-import { Button, Modal, Pressable, ScrollView, Share, StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import { useRef, useState } from "react";
+import { ActivityIndicator, Alert, Button, Modal, Pressable, ScrollView, Share, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { accent, FeedIcon } from "../../components/home/FeedIcon";
-import { usePaginatedQuery, useQuery } from "convex/react";
+import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { SavedPostLink } from "../../components/social/SavedPostLink";
@@ -15,8 +16,12 @@ import { PostTile } from "../../components/social/PostTile";
 import { useSavedPosts } from "../../components/home/SavedPosts";
 import { highlights, photos, sections } from "../../components/profile/media";
 
+import { pickProfilePhoto, ProfilePhotoMenu, useProfilePhotoMenu, type PhotoSource } from "../../components/profile/ProfilePhotoMenu";
+import { uploadMedia } from "../../components/social/upload";
 import { router } from "expo-router";
+import { useTabBarClearance } from "../../components/navigation/GlassTabs";
 import { useSessionProfile } from "../../components/profile/SessionProfile";
+import { ProfileAvatar } from "../../components/profile/ProfileAvatar";
 
 const icons = {
   settings: require("../../../assets/images/profile/settings.svg"),
@@ -31,11 +36,12 @@ export default function AccountScreen() {
   const { signOut } = useAuth();
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
+  const tabBarClearance = useTabBarClearance();
   const page = Math.min(width - insets.left - insets.right, 550);
   const unit = page / 814;
   const portrait = 240 * unit;
   const cover = Math.max(406 * unit, insets.top + 132);
-  const { profile: { name, handle, bio, photo: portraitUri } } = useSessionProfile();
+  const { profile: { name, handle, bio } } = useSessionProfile();
   const [section, setSection] = useState<string>("Posts");
   const [panel, setPanel] = useState("");
   const [photo, setPhoto] = useState<(typeof photos)[number]>();
@@ -62,15 +68,38 @@ export default function AccountScreen() {
       setBusy(false);
     }
   }
+  const { screenRef, badgeRef, menu, close, openPhotoMenu } = useProfilePhotoMenu();
+  const changingPhoto = useRef(false);
+  const [savingPhoto, setSavingPhoto] = useState(false);
+  const beginUpload = useMutation(api.social.beginUpload);
+  const setProfilePhoto = useMutation(api.social.setProfilePhoto);
+
+  async function changePhoto(source: PhotoSource) {
+    if (changingPhoto.current) return;
+    changingPhoto.current = true;
+    setSavingPhoto(true);
+    try {
+      const asset = await pickProfilePhoto(source);
+      if (!asset) return;
+      const file = await uploadMedia(asset, beginUpload, () => {});
+      await setProfilePhoto(file);
+    } catch {
+      Alert.alert("Couldn’t update your photo", "Try taking or choosing the photo again.");
+    } finally {
+      changingPhoto.current = false;
+      setSavingPhoto(false);
+    }
+  }
+
   const connection = useSocialSession();
   const me = useQuery(api.social.me, connection.ready ? {} : "skip");
   const mine = usePaginatedQuery(api.social.feed, connection.ready ? { scope: "mine" } : "skip", { initialNumItems: 18 });
   const [postId, setPostId] = useState<Id<"posts">>();
   const stats = [[String(me?.posts ?? "…"), "Posts"], [String(me?.followers ?? "…"), "Followers"], [String(me?.followingCount ?? "…"), "Following"]];
   return (
-    <View style={s.screen}>
+    <View ref={screenRef} collapsable={false} style={s.screen}>
       <StatusBar style="dark" />
-      <ScrollView contentInsetAdjustmentBehavior="never" showsVerticalScrollIndicator={false} contentContainerStyle={{ alignItems: "center", paddingBottom: insets.bottom + 86 }}>
+      <ScrollView contentInsetAdjustmentBehavior="never" showsVerticalScrollIndicator={false} contentContainerStyle={{ alignItems: "center", paddingBottom: tabBarClearance + 16 }}>
         <View style={{ width: page }}>
           <Image source={require("../../../assets/images/profile/cover.jpg")} style={{ width: page, height: cover + 25 }} contentFit="fill" />
           <View style={[s.header, { top: Math.max(50 * unit, insets.top), left: 46 * unit, right: 43 * unit }]}>
@@ -88,8 +117,13 @@ export default function AccountScreen() {
               {stats.map(([value, label], i) => <View key={label} style={[s.stat, i > 0 && s.divider]}><Text style={s.number}>{value}</Text><Text style={s.statLabel}>{label}</Text></View>)}
             </View>
             <View style={[s.avatarFrame, { top: -90 * unit, left: 36 * unit, width: portrait, height: portrait, borderRadius: portrait / 2 }]}>
-              <Image source={portraitUri || require("../../../assets/images/profile/portrait.jpg")} style={s.avatar} />
-              <View style={s.badge}><Text style={s.badgeText}>+</Text></View>
+              <ProfileAvatar style={s.avatar} />
+              <Pressable ref={badgeRef} accessibilityRole="button" accessibilityLabel="Change profile photo"
+                accessibilityState={{ expanded: !!menu, busy: savingPhoto }} disabled={savingPhoto}
+                hitSlop={9} onPress={openPhotoMenu} style={s.badge}>
+                {savingPhoto ? <ActivityIndicator size="small" color="white" /> :
+                  <SymbolView name={{ ios: "camera.fill", android: "photo_camera", web: "photo_camera" }} size={16} tintColor="white" />}
+              </Pressable>
             </View>
             <View style={s.details}>
               <Text accessibilityRole="header" style={s.name}>{name}{user?.publicMetadata.verified === true && <Text style={{ color: accent }}> ✔</Text>}</Text>
@@ -124,6 +158,7 @@ export default function AccountScreen() {
           </View>
         </View>
       </ScrollView>
+      <ProfilePhotoMenu menu={menu} close={close} onChoose={changePhoto} />
       {connection.ready && postId && <PostDialog showPost postId={postId} close={() => setPostId(undefined)} />}
       <Modal visible={!!panel} transparent animationType="fade" onRequestClose={() => setPanel("")}>
         <View style={s.backdrop}><View style={s.dialog}>
@@ -156,7 +191,6 @@ const s = StyleSheet.create({
   avatarFrame: { position: "absolute", borderWidth: 2.5, borderColor: "white", backgroundColor: "white" },
   avatar: { width: "100%", height: "100%", borderRadius: 150 },
   badge: { position: "absolute", bottom: 2, right: 3, width: 28, height: 28, borderRadius: 14, borderWidth: 2, borderColor: "#fff", backgroundColor: "#5028ff", alignItems: "center", justifyContent: "center" },
-  badgeText: { color: "white", fontSize: 22, lineHeight: 24 },
   details: { paddingHorizontal: 19, paddingTop: 8 },
   name: { color: "#0b1020", fontSize: 21, fontWeight: "700", letterSpacing: -0.6 },
   handle: { fontSize: 13, color: "#52586b", fontWeight: "500", marginTop: 2 },

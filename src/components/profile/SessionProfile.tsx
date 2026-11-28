@@ -1,3 +1,5 @@
+import { useConvexAuth, useQuery } from "convex/react";
+import { api } from "../../../convex/_generated/api";
 import { useAuth, useUser } from "@clerk/expo";
 import { createContext, useContext, useState, type ReactNode } from "react";
 
@@ -9,13 +11,14 @@ function Session({ children }: { children: ReactNode }) {
   const { user } = useUser();
   const [saved, save] = useState<Profile | null>(null);
   const name = user?.fullName || user?.username || "Snaply user";
-  const profile = saved ?? {
+  const { isAuthenticated } = useConvexAuth();
+  const me = useQuery(api.social.me, isAuthenticated ? {} : "skip");
+  const profile = { ...(saved ?? {
     name,
     handle: user?.username || name.toLowerCase().replace(/\s+/g, ""),
     bio: typeof user?.unsafeMetadata.bio === "string" ? user.unsafeMetadata.bio :
       "Traveller • Photographer • Tech Enthusiast\nCapturing places, people and moments around the world. 🌍",
-    photo: null,
-  };
+  }), photo: me?.avatar ?? null };
   return <Context.Provider value={{ profile, save }}>{children}</Context.Provider>;
 }
 

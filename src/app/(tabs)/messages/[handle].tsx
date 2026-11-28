@@ -25,6 +25,7 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useTabBarClearance } from "../../../components/navigation/GlassTabs";
 import { api } from "../../../../convex/_generated/api";
 import { FeedIcon } from "../../../components/home/FeedIcon";
 import { useChatPresence } from "../../../components/messages/useChatPresence";
@@ -84,6 +85,7 @@ function Thread({ handle }: { handle: string }) {
   const read = useMutation(api.messages.markRead);
   const begin = useMutation(api.messages.beginUpload);
   const insets = useSafeAreaInsets();
+  const tabBarClearance = useTabBarClearance();
   const list = useRef<FlatList<ChatMessage>>(null);
   const nearEnd = useRef(true);
   const busy = useRef(false);
@@ -279,7 +281,7 @@ function Thread({ handle }: { handle: string }) {
           />
         </View>
       </View>
-      <View style={[s.page, { paddingLeft: insets.left, paddingRight: insets.right }]}>
+      <View style={[s.page, { paddingLeft: insets.left, paddingRight: insets.right, paddingBottom: tabBarClearance }]}>
         <FlatList
           ref={list}
           data={ordered}

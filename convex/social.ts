@@ -54,8 +54,13 @@ function follow(ctx: QueryCtx, followerId: Id<"profiles">, followeeId: Id<"profi
 function like(ctx: QueryCtx, postId: Id<"posts">, userId: Id<"profiles">) {
   return ctx.db.query("likes").withIndex("by_postId_and_userId", q => q.eq("postId", postId).eq("userId", userId)).unique();
 }
+export function profileAvatar(ctx: QueryCtx, row: Doc<"profiles">) {
+  return row.avatarStorageId ? ctx.storage.getUrl(row.avatarStorageId) : row.avatar;
+}
+
 async function personView(ctx: QueryCtx, row: Doc<"profiles">, viewerId: Id<"profiles">) {
-  const { name, handle, avatar, followers, followingCount, posts } = row;
+  const avatar = await profileAvatar(ctx, row);
+  const { name, handle, followers, followingCount, posts } = row;
   const isMe = row._id === viewerId;
   return { id: row._id, name, handle, avatar, followers, followingCount, posts, isMe,
     following: !isMe && !!await follow(ctx, viewerId, row._id) };
@@ -155,6 +160,23 @@ export const beginUpload = mutation({
     return { uploadId, url: await ctx.storage.generateUploadUrl(), uploadContentType: uploadContentType(args.contentType, uploadId) };
   },
 });
+export const setProfilePhoto = mutation({
+  args: { uploadId: v.id("uploads"), storageId: v.id("_storage") },
+  returns: v.null(),
+  handler: async (ctx, { uploadId, storageId }) => {
+    const user = await viewer(ctx);
+    if (user.avatarStorageId === storageId) return null;
+    const intent = await ctx.db.get("uploads", uploadId);
+    if (!intent || intent.authorId !== user._id || intent.purpose || !intent.contentType.startsWith("image/") ||
+      Date.now() >= intent._creationTime + uploadRetentionMs) throw new ConvexError("Select your profile photo again.");
+    await verifyFile(ctx, storageId, intent);
+    await ctx.db.patch("profiles", user._id, { avatarStorageId: storageId });
+    await ctx.db.delete("uploads", uploadId);
+    if (user.avatarStorageId) await ctx.storage.delete(user.avatarStorageId);
+    return null;
+  },
+});
+
 export const expireUpload = internalMutation({
   args: { uploadId: v.id("uploads"), cursor: v.optional(v.string()) }, returns: v.null(),
   handler: async (ctx, { uploadId, cursor }) => {
